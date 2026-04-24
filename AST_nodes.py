@@ -77,12 +77,16 @@ class Const(Expr):
         return []
     
     def __init__(self, val):
+        if isinstance(val, bool):
+            raise TypeError(
+                f"Const.value must be Fraction/int/e/pi and cannot be bool, got {type(val).__name__}"
+            )
+
         if not (
             isinstance(val, Fraction)
             or isinstance(val, int)
             or val == self.SPECIAL_E
             or val == self.SPECIAL_PI
-            and not isinstance(val, bool)
         ):
             raise TypeError(
                 f"Const.value must be Fraction/int/e/pi and cannot be bool, got {type(val).__name__}"

@@ -61,6 +61,21 @@ def build_cases() -> list[Case]:
             expected_pretty="((2 ^ x) * Ln(2) * 1)",
         ),
         Case(
+            name="pow_x_pi_over_2",
+            expr=Pow(x, Div(Const("pi"), Const(2))),
+            expected_pretty="((pi / 2) * (x ^ ((pi / 2) + -1)) * 1)",
+        ),
+        Case(
+            name="pow_6_pi_e_x",
+            expr=Pow(Mul([Const(6), Const("pi"), Const("e")]), x),
+            expected_pretty="(((6 * pi * e) ^ x) * Ln((6 * pi * e)) * 1)",
+        ),
+        Case(
+            name="const_expr_derivative_zero",
+            expr=Mul([Pow(Const("e"), Div(Const(1), Const(2))), Const("pi")]),
+            expected_pretty="0",
+        ),
+        Case(
             name="pow_x_x_unsupported",
             expr=Pow(x, x),
             expected_exception=NotImplementedError,
