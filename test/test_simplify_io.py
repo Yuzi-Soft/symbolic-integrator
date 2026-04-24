@@ -10,7 +10,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from AST_nodes import Add, Const, Div, Mul, Pow, Sin, Var
+from AST_nodes import Add, Const, Div, Ln, Mul, Pow, Sin, Var
 from simplify import simplify
 
 
@@ -76,6 +76,11 @@ def build_cases() -> list[Case]:
             name="constant_common_pi",
             expr=Add([Mul([Const(2), Const("pi")]), Mul([Const(3), sqrt_2, Const("pi")]), Mul([Const(4), Const("pi")])]),
             expected_pretty="((6 + (3 * (2 ^ 1/2))) * pi)",
+        ),
+        Case(
+            name="local_expand_cancel",
+            expr=Add([Const(3), x, Mul([Add([Const(1), Div(Const(1), x)]), x]), Div(Const(1), x), Ln(x)]),
+            expected_pretty="(4 + (2 * x) + (1 / x) + Ln(x))",
         ),
     ]
 

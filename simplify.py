@@ -51,20 +51,20 @@ def simplify_once(expr: Expr) -> Expr:
 
     if isinstance(expr, Sin):
         child = simplify(expr.children[0])
-        return Sin(child)
+        return simplify_sin(child)
 
     if isinstance(expr, Cos):
         child = simplify(expr.children[0])
-        return Cos(child)
+        return simplify_cos(child)
 
     if isinstance(expr, Ln):
         child = simplify(expr.children[0])
-        return Ln(child)
+        return simplify_ln(child)
 
     if isinstance(expr, Log):
         base = simplify(expr.children[0])
         argument = simplify(expr.children[1])
-        return Log(base, argument)
+        return simplify_log(base, argument)
 
     return expr
 
@@ -115,7 +115,8 @@ def simplify_add(terms: list[Expr]) -> Expr:
 
 def simplify_mul(factors: list[Expr]) -> Expr:
     pending = list(factors)
-    flat_factors: list[Expr] = []
+    numerator_factors: list[Expr] = []
+    denominator_factors: list[Expr] = []
     rational_coefficient = Fraction(1, 1)
 
     while pending:
@@ -125,24 +126,80 @@ def simplify_mul(factors: list[Expr]) -> Expr:
         if isinstance(factor, Mul):
             pending = list(factor.children) + pending
             continue
+        if isinstance(factor, Div) and is_one(factor.children[0]):
+            denominator = factor.children[1]
+            if isinstance(denominator, Mul):
+                denominator_factors.extend(denominator.children)
+            else:
+                denominator_factors.append(denominator)
+            continue
         if is_one(factor):
             continue
         if is_rational_const(factor):
             rational_coefficient *= rational_const_value(factor)
             continue
-        flat_factors.append(factor)
+        numerator_factors.append(factor)
 
     if rational_coefficient == 0:
         return ZERO
 
-    flat_factors.sort(key=factor_sort_key)
+    # Lightweight local distribution to remove pseudo-complex products like
+    # (1 + 1/x) * x without globally expanding large products.
+    add_factors = [factor for factor in numerator_factors if isinstance(factor, Add)]
+    if len(denominator_factors) == 0 and len(add_factors) == 1:
+        add_factor = add_factors[0]
+        common_factors = [factor for factor in numerator_factors if factor is not add_factor]
+        if rational_coefficient != 1:
+            common_factors = [Const(rational_coefficient)] + common_factors
+
+        if len(add_factor.children) <= 4 and len(common_factors) <= 3:
+            distributed_terms = [simplify_mul(common_factors + [term]) for term in add_factor.children]
+            return simplify_add(distributed_terms)
+
+    signed_exponents: dict[tuple, Fraction] = {}
+    representatives: dict[tuple, Expr] = {}
+
+    for factor in numerator_factors:
+        base, exponent = split_factor_base_exponent(factor)
+        key = basis_key(base)
+        signed_exponents[key] = signed_exponents.get(key, Fraction(0, 1)) + exponent
+        representatives[key] = base
+
+    for factor in denominator_factors:
+        base, exponent = split_factor_base_exponent(factor)
+        key = basis_key(base)
+        signed_exponents[key] = signed_exponents.get(key, Fraction(0, 1)) - exponent
+        representatives[key] = base
+
+    simplified_numerator: list[Expr] = []
+    simplified_denominator: list[Expr] = []
+    for key, exponent in signed_exponents.items():
+        if exponent == 0:
+            continue
+        base = representatives[key]
+        if exponent > 0:
+            simplified_numerator.append(build_power_factor(base, exponent))
+        else:
+            simplified_denominator.append(build_power_factor(base, -exponent))
+
+    simplified_numerator.sort(key=factor_sort_key)
+    simplified_denominator.sort(key=factor_sort_key)
 
     result_factors: list[Expr] = []
-    if rational_coefficient != 1 or len(flat_factors) == 0:
+    if rational_coefficient != 1 or len(simplified_numerator) == 0:
         result_factors.append(Const(rational_coefficient))
-    result_factors.extend(flat_factors)
+    result_factors.extend(simplified_numerator)
 
-    return build_product(result_factors)
+    numerator_expr = build_product(result_factors)
+    if len(simplified_denominator) == 0:
+        return numerator_expr
+
+    denominator_expr = build_product(simplified_denominator)
+    if is_one(numerator_expr):
+        return Div(ONE, denominator_expr)
+    if isinstance(numerator_expr, Mul):
+        return build_product(list(numerator_expr.children) + [Div(ONE, denominator_expr)])
+    return Mul([numerator_expr, Div(ONE, denominator_expr)])
 
 
 def simplify_div(numerator: Expr, denominator: Expr) -> Expr:
@@ -206,6 +263,84 @@ def simplify_pow(base: Expr, exponent: Expr) -> Expr:
                 return Const(base_value ** integer_exponent)
 
     return Pow(base, exponent)
+
+
+def simplify_sin(child: Expr) -> Expr:
+    if is_rational_const(child) and rational_const_value(child) == 0:
+        return ZERO
+    pi_multiplier = extract_integer_pi_multiplier(child)
+    if pi_multiplier is not None:
+        return ZERO
+    return Sin(child)
+
+
+def simplify_cos(child: Expr) -> Expr:
+    if is_rational_const(child) and rational_const_value(child) == 0:
+        return ONE
+    pi_multiplier = extract_integer_pi_multiplier(child)
+    if pi_multiplier is not None:
+        if pi_multiplier % 2 == 0:
+            return ONE
+        return Const(-1)
+    return Cos(child)
+
+
+def simplify_ln(child: Expr) -> Expr:
+    if is_one(child):
+        return ZERO
+    if isinstance(child, Const) and child.is_e():
+        return ONE
+    return Ln(child)
+
+
+def simplify_log(base: Expr, argument: Expr) -> Expr:
+    if is_one(argument):
+        return ZERO
+    if isinstance(base, Const) and isinstance(argument, Const) and base == argument:
+        return ONE
+    if isinstance(base, Const) and base.is_e():
+        return simplify_ln(argument)
+    return Log(base, argument)
+
+
+def split_factor_base_exponent(factor: Expr) -> tuple[Expr, Fraction]:
+    if isinstance(factor, Pow) and is_rational_const(factor.children[1]):
+        return factor.children[0], rational_const_value(factor.children[1])
+    return factor, Fraction(1, 1)
+
+
+def build_power_factor(base: Expr, exponent: Fraction) -> Expr:
+    if exponent == 1:
+        return base
+    return simplify_pow(base, Const(exponent))
+
+
+def extract_integer_pi_multiplier(expr: Expr) -> int | None:
+    if isinstance(expr, Const) and expr.is_pi():
+        return 1
+
+    if not isinstance(expr, Mul):
+        return None
+
+    coeff = Fraction(1, 1)
+    pi_count = 0
+    other_count = 0
+
+    for factor in expr.children:
+        if isinstance(factor, Const) and factor.is_pi():
+            pi_count += 1
+        elif is_rational_const(factor):
+            coeff *= rational_const_value(factor)
+        else:
+            other_count += 1
+
+    if pi_count != 1 or other_count != 0:
+        return None
+
+    if coeff.denominator != 1:
+        return None
+
+    return coeff.numerator
 
 
 def normalize_term(term: Expr) -> tuple[Fraction, list[Expr]]:
@@ -311,7 +446,8 @@ def factor_sort_key(expr: Expr):
 
 def const_factor_sort_key(expr: Expr):
     if is_rational_const(expr):
-        return (0, float(rational_const_value(expr)))
+        value = rational_const_value(expr)
+        return (0, value.numerator, value.denominator)
 
     if isinstance(expr, Const):
         if expr.is_e():
@@ -338,7 +474,8 @@ def expr_sort_key(expr: Expr):
 
     if isinstance(expr, Const):
         if is_rational_const(expr):
-            return base + (0, float(expr.value))
+            value = expr.value
+            return base + (0, value.numerator, value.denominator)
         if expr.is_e():
             return base + (1, 0)
         if expr.is_pi():

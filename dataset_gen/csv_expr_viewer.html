@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Expression CSV Viewer</title>
+    <style>
+      :root {
+        --bg: #f7f8fb;
+        --panel: #ffffff;
+        --line: #d9dee8;
+        --text: #1e2430;
+        --muted: #5c6577;
+        --accent: #2755d8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "SF Pro Text", "Segoe UI", Arial, sans-serif;
+        color: var(--text);
+        background: radial-gradient(1400px 700px at 0% 0%, #edf2ff 0%, var(--bg) 55%);
+      }
+      .app {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 14px;
+      }
+      .topbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px;
+      }
+      button, select, input[type="file"], input[type="number"] {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--text);
+        padding: 7px 10px;
+        font-size: 14px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: #b8c8ff;
+        background: #eef3ff;
+        color: #1746cb;
+      }
+      .status {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .content {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: 42% 58%;
+        gap: 10px;
+        min-height: 72vh;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      thead th {
+        position: sticky;
+        top: 0;
+        background: #f2f5fb;
+        text-align: left;
+        font-size: 13px;
+        color: #2f3a52;
+        border-bottom: 1px solid var(--line);
+        padding: 8px;
+      }
+      tbody td {
+        border-bottom: 1px solid #eef2f8;
+        padding: 8px;
+        font-size: 13px;
+        vertical-align: top;
+      }
+      tbody tr {
+        cursor: pointer;
+      }
+      tbody tr:hover {
+        background: #f6f9ff;
+      }
+      tbody tr.active {
+        background: #eaf1ff;
+      }
+      .table-wrap {
+        height: 72vh;
+        overflow: auto;
+      }
+      .math-panel {
+        padding: 12px;
+      }
+      .expr-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 12px;
+        background: #fcfdff;
+      }
+      .expr-title {
+        font-size: 12px;
+        color: #4664a8;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 8px;
+      }
+      .math-box {
+        min-height: 72px;
+        border: 1px solid #e7ebf4;
+        border-radius: 8px;
+        background: #fff;
+        padding: 10px;
+        overflow-x: auto;
+      }
+      .raw {
+        margin-top: 8px;
+        color: #4f586b;
+        font-family: Menlo, Consolas, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .hint {
+        font-size: 12px;
+        color: #6a7284;
+      }
+      @media (max-width: 1100px) {
+        .content { grid-template-columns: 1fr; }
+        .table-wrap { height: 40vh; }
+      }
+    </style>
+    <script>
+      window.MathJax = {
+        loader: { load: ["input/asciimath", "output/chtml"] },
+        startup: {
+          typeset: false
+        }
+      };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/startup.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <div class="topbar">
+        <input id="csvFileInput" type="file" accept=".csv,text/csv" />
+        <button id="prevBtn">Prev</button>
+        <button id="nextBtn">Next</button>
+        <button id="randomBtn">Random</button>
+        <label for="displayMode">Display</label>
+        <select id="displayMode">
+          <option value="raw" selected>Raw</option>
+          <option value="clean">Cleaned</option>
+        </select>
+        <label for="gotoInput">Go to #</label>
+        <input id="gotoInput" type="number" min="1" step="1" style="width: 86px" />
+        <button id="gotoBtn">Go</button>
+      </div>
+      <div class="status" id="status">Load a CSV to start.</div>
+      <div class="content">
+        <div class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 56px">#</th>
+                  <th>Derivative (preview)</th>
+                  <th>Original (preview)</th>
+                </tr>
+              </thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel math-panel">
+          <div class="expr-card">
+            <div class="expr-title">Derivative</div>
+            <div class="math-box" id="derivativeMath"></div>
+            <div class="raw" id="derivativeRaw"></div>
+          </div>
+          <div class="expr-card">
+            <div class="expr-title">Original Function</div>
+            <div class="math-box" id="originalMath"></div>
+            <div class="raw" id="originalRaw"></div>
+          </div>
+          <div class="hint">
+            Formula view is rendered by MathJax (ASCII math mode). If network blocks CDN loading, raw text still works.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const state = {
+        rows: [],
+        selected: -1,
+        source: "",
+        displayMode: "raw"
+      };
+
+      function shortText(s, n = 38) {
+        return s.length <= n ? s : s.slice(0, n - 3) + "...";
+      }
+
+      function parseCsv(text) {
+        const rows = [];
+        let row = [];
+        let cell = "";
+        let i = 0;
+        let inQuotes = false;
+        while (i < text.length) {
+          const ch = text[i];
+          const next = text[i + 1];
+          if (inQuotes) {
+            if (ch === '"' && next === '"') {
+              cell += '"';
+              i += 2;
+              continue;
+            }
+            if (ch === '"') {
+              inQuotes = false;
+              i += 1;
+              continue;
+            }
+            cell += ch;
+            i += 1;
+            continue;
+          }
+          if (ch === '"') {
+            inQuotes = true;
+            i += 1;
+            continue;
+          }
+          if (ch === ",") {
+            row.push(cell);
+            cell = "";
+            i += 1;
+            continue;
+          }
+          if (ch === "\n" || ch === "\r") {
+            if (ch === "\r" && next === "\n") i += 1;
+            row.push(cell);
+            cell = "";
+            if (row.length > 1) rows.push(row);
+            row = [];
+            i += 1;
+            continue;
+          }
+          cell += ch;
+          i += 1;
+        }
+        row.push(cell);
+        if (row.length > 1) rows.push(row);
+        return rows;
+      }
+
+      function cleanRows(rawRows) {
+        const out = [];
+        for (const r of rawRows) {
+          if (r.length < 2) continue;
+          const d = (r[0] || "").trim();
+          const e = (r[1] || "").trim();
+          if (!d || !e) continue;
+          out.push([d, e]);
+        }
+        return out;
+      }
+
+      function nextNonSpace(s, start) {
+        for (let i = start; i < s.length; i += 1) {
+          if (s[i] !== " " && s[i] !== "\t" && s[i] !== "\n") return i;
+        }
+        return null;
+      }
+
+      function prevNonSpace(s, start) {
+        for (let i = start; i >= 0; i -= 1) {
+          if (s[i] !== " " && s[i] !== "\t" && s[i] !== "\n") return i;
+        }
+        return null;
+      }
+
+      function buildPairMap(s) {
+        const stack = [];
+        const pairs = new Map();
+        for (let i = 0; i < s.length; i += 1) {
+          if (s[i] === "(") stack.push(i);
+          if (s[i] === ")" && stack.length) {
+            const open = stack.pop();
+            pairs.set(open, i);
+          }
+        }
+        return pairs;
+      }
+
+      function collapseRedundantParentheses(expr) {
+        let out = expr;
+        while (true) {
+          const pairs = buildPairMap(out);
+          let changed = false;
+          for (const [open, close] of pairs.entries()) {
+            const innerOpen = nextNonSpace(out, open + 1);
+            const innerClose = prevNonSpace(out, close - 1);
+            if (innerOpen === null || innerClose === null) continue;
+            if (out[innerOpen] !== "(") continue;
+            const partner = pairs.get(innerOpen);
+            if (partner === innerClose) {
+              out = out.slice(0, close) + out.slice(close + 1);
+              out = out.slice(0, open) + out.slice(open + 1);
+              changed = true;
+              break;
+            }
+          }
+          if (!changed) break;
+        }
+        return out;
+      }
+
+      function normalizeSigns(expr) {
+        let out = expr;
+        while (true) {
+          const prev = out;
+          out = out
+            .replace(/\+\s*\(-\s*/g, " - (")
+            .replace(/-\s*\(-\s*/g, " + (")
+            .replace(/\+\s*-\s*/g, " - ")
+            .replace(/-\s*\+\s*/g, " - ")
+            .replace(/-\s*-\s*/g, " + ")
+            .replace(/\+\s*\+\s*/g, " + ")
+            .replace(/\s{2,}/g, " ")
+            .trim();
+          if (out === prev) break;
+        }
+        return out;
+      }
+
+      function cleanExpression(expr) {
+        let out = expr.trim();
+        out = collapseRedundantParentheses(out);
+        out = normalizeSigns(out);
+        return out;
+      }
+
+      function parseRational(text) {
+        const m = text.match(/^(-?\d+)(?:\/(\d+))?$/);
+        if (!m) return null;
+        const num = Number(m[1]);
+        const den = m[2] ? Number(m[2]) : 1;
+        return { num, den };
+      }
+
+      function gcd(a, b) {
+        let x = Math.abs(a);
+        let y = Math.abs(b);
+        while (y !== 0) {
+          const t = x % y;
+          x = y;
+          y = t;
+        }
+        return x || 1;
+      }
+
+      function simplifyFrac(frac) {
+        if (frac.den < 0) return simplifyFrac({ num: -frac.num, den: -frac.den });
+        const g = gcd(frac.num, frac.den);
+        return { num: frac.num / g, den: frac.den / g };
+      }
+
+      function mulFrac(a, b) {
+        return simplifyFrac({ num: a.num * b.num, den: a.den * b.den });
+      }
+
+      function makeParser(input) {
+        let i = 0;
+
+        function skipWs() {
+          while (i < input.length && /\s/.test(input[i])) i += 1;
+        }
+
+        function peek() {
+          skipWs();
+          return input[i] || null;
+        }
+
+        function consume(ch) {
+          skipWs();
+          if (input[i] !== ch) throw new Error(`expected '${ch}' at ${i}`);
+          i += 1;
+        }
+
+        function startsWithWord(word) {
+          skipWs();
+          return input.slice(i, i + word.length) === word;
+        }
+
+        function parseNumberOrSymbol() {
+          skipWs();
+          const numberMatch = input.slice(i).match(/^-?\d+(?:\/\d+)?/);
+          if (numberMatch) {
+            i += numberMatch[0].length;
+            return { type: "const", value: numberMatch[0] };
+          }
+
+          if (input.slice(i, i + 2) === "pi") {
+            i += 2;
+            return { type: "sym", name: "pi" };
+          }
+          if (input[i] === "e") {
+            i += 1;
+            return { type: "sym", name: "e" };
+          }
+          if (input[i] === "x") {
+            i += 1;
+            return { type: "sym", name: "x" };
+          }
+          throw new Error(`token error at ${i}`);
+        }
+
+        function parsePrimary() {
+          skipWs();
+          const ch = input[i];
+          if (ch === "(") {
+            consume("(");
+            const node = parseAddSub();
+            consume(")");
+            return node;
+          }
+
+          if (startsWithWord("Sin(")) {
+            i += 3;
+            consume("(");
+            const arg = parseAddSub();
+            consume(")");
+            return { type: "func", fn: "sin", arg };
+          }
+          if (startsWithWord("Cos(")) {
+            i += 3;
+            consume("(");
+            const arg = parseAddSub();
+            consume(")");
+            return { type: "func", fn: "cos", arg };
+          }
+          if (startsWithWord("Ln(")) {
+            i += 2;
+            consume("(");
+            const arg = parseAddSub();
+            consume(")");
+            return { type: "func", fn: "ln", arg };
+          }
+          if (startsWithWord("Log_")) {
+            i += 4;
+            let base;
+            if (peek() === "(") {
+              consume("(");
+              base = parseAddSub();
+              consume(")");
+            } else {
+              base = parseNumberOrSymbol();
+            }
+            consume("(");
+            const arg = parseAddSub();
+            consume(")");
+            return { type: "log", base, arg };
+          }
+          return parseNumberOrSymbol();
+        }
+
+        function parseUnary() {
+          skipWs();
+          if (peek() === "+") {
+            consume("+");
+            return parseUnary();
+          }
+          if (peek() === "-") {
+            consume("-");
+            return { type: "neg", value: parseUnary() };
+          }
+          return parsePrimary();
+        }
+
+        function parsePow() {
+          let left = parseUnary();
+          skipWs();
+          while (peek() === "^") {
+            consume("^");
+            const right = parseUnary();
+            left = { type: "pow", left, right };
+            skipWs();
+          }
+          return left;
+        }
+
+        function parseMulDiv() {
+          let left = parsePow();
+          skipWs();
+          while (peek() === "*" || peek() === "/") {
+            const op = peek();
+            consume(op);
+            const right = parsePow();
+            left = { type: op === "*" ? "mul" : "div", left, right };
+            skipWs();
+          }
+          return left;
+        }
+
+        function parseAddSub() {
+          let left = parseMulDiv();
+          skipWs();
+          while (peek() === "+" || peek() === "-") {
+            const op = peek();
+            consume(op);
+            const right = parseMulDiv();
+            left = { type: op === "+" ? "add" : "sub", left, right };
+            skipWs();
+          }
+          return left;
+        }
+
+        const node = parseAddSub();
+        skipWs();
+        if (i !== input.length) throw new Error(`extra token at ${i}`);
+        return node;
+      }
+
+      function precedence(node) {
+        if (node.type === "add" || node.type === "sub") return 1;
+        if (node.type === "mul" || node.type === "div") return 2;
+        if (node.type === "pow") return 3;
+        if (node.type === "neg") return 4;
+        return 5;
+      }
+
+      function flattenMul(node, out) {
+        if (node.type === "mul") {
+          flattenMul(node.left, out);
+          flattenMul(node.right, out);
+        } else {
+          out.push(node);
+        }
+      }
+
+      function maybeWrap(node, parentPrec) {
+        const text = formatNode(node);
+        if (precedence(node) < parentPrec) return "(" + text + ")";
+        return text;
+      }
+
+      function formatMulNode(node) {
+        const factors = [];
+        flattenMul(node, factors);
+
+        let coeff = { num: 1, den: 1 };
+        const normal = [];
+        const denominator = [];
+
+        for (const factor of factors) {
+          if (factor.type === "const") {
+            const rat = parseRational(factor.value);
+            if (rat) {
+              coeff = mulFrac(coeff, rat);
+              continue;
+            }
+          }
+          if (factor.type === "div" && factor.left.type === "const") {
+            const leftRat = parseRational(factor.left.value);
+            if (leftRat && leftRat.num === 1 && leftRat.den === 1) {
+              denominator.push(factor.right);
+              continue;
+            }
+          }
+          normal.push(factor);
+        }
+
+        coeff = simplifyFrac(coeff);
+        let sign = "";
+        if (coeff.num < 0) {
+          sign = "-";
+          coeff = { num: -coeff.num, den: coeff.den };
+        }
+
+        const numeratorParts = [];
+        if (!(coeff.num === 1 && normal.length > 0)) {
+          numeratorParts.push(coeff.num.toString());
+        }
+        for (const n of normal) numeratorParts.push(maybeWrap(n, 2));
+
+        if (denominator.length === 0 && coeff.den === 1) {
+          return sign + numeratorParts.join(" * ");
+        }
+
+        const denomParts = [];
+        if (coeff.den !== 1) denomParts.push(coeff.den.toString());
+        for (const d of denominator) denomParts.push(maybeWrap(d, 2));
+
+        const numText = numeratorParts.length ? numeratorParts.join(" * ") : "1";
+        const denInner = denomParts.join(" * ");
+        const simpleSingleDen =
+          denomParts.length === 1 &&
+          coeff.den === 1 &&
+          denominator.length === 1 &&
+          (denominator[0].type === "sym" || denominator[0].type === "const");
+        const denText = simpleSingleDen ? denInner : "(" + denInner + ")";
+        return sign + "(" + numText + " / " + denText + ")";
+      }
+
+      function collectAddTerms(node, out, sign = 1) {
+        if (node.type === "add") {
+          collectAddTerms(node.left, out, sign);
+          collectAddTerms(node.right, out, sign);
+          return;
+        }
+        if (node.type === "sub") {
+          collectAddTerms(node.left, out, sign);
+          collectAddTerms(node.right, out, -sign);
+          return;
+        }
+        if (node.type === "neg") {
+          collectAddTerms(node.value, out, -sign);
+          return;
+        }
+        out.push({ sign, node });
+      }
+
+      function isFullyWrappedByParens(text) {
+        const s = text.trim();
+        if (s.length < 2 || s[0] !== "(" || s[s.length - 1] !== ")") return false;
+        let depth = 0;
+        for (let i = 0; i < s.length; i += 1) {
+          if (s[i] === "(") depth += 1;
+          if (s[i] === ")") depth -= 1;
+          if (depth === 0 && i < s.length - 1) return false;
+        }
+        return depth === 0;
+      }
+
+      function formatAddNode(node) {
+        const terms = [];
+        collectAddTerms(node, terms, 1);
+        if (!terms.length) return "0";
+
+        function normalizeNodeSign(inputSign, inputNode) {
+          if (inputNode.type === "const") {
+            const rat = parseRational(inputNode.value);
+            if (rat && rat.num < 0) {
+              return {
+                sign: -inputSign,
+                node: { type: "const", value: `${-rat.num}${rat.den === 1 ? "" : "/" + rat.den}` }
+              };
+            }
+          }
+          if (inputNode.type === "mul") {
+            const factors = [];
+            flattenMul(inputNode, factors);
+            for (let i = 0; i < factors.length; i += 1) {
+              const f = factors[i];
+              if (f.type !== "const") continue;
+              const rat = parseRational(f.value);
+              if (!rat || rat.num >= 0) continue;
+              const positive = { type: "const", value: `${-rat.num}${rat.den === 1 ? "" : "/" + rat.den}` };
+              const newFactors = factors.slice();
+              newFactors[i] = positive;
+              let rebuilt = newFactors[0];
+              for (let k = 1; k < newFactors.length; k += 1) {
+                rebuilt = { type: "mul", left: rebuilt, right: newFactors[k] };
+              }
+              return { sign: -inputSign, node: rebuilt };
+            }
+          }
+          return { sign: inputSign, node: inputNode };
+        }
+
+        let out = "";
+        for (let idx = 0; idx < terms.length; idx += 1) {
+          const term = normalizeNodeSign(terms[idx].sign, terms[idx].node);
+          const text = maybeWrap(term.node, 1);
+          const displayText =
+            precedence(term.node) >= 2 && isFullyWrappedByParens(text) ? text.slice(1, -1) : text;
+          if (idx === 0) {
+            out += term.sign < 0 ? "-" + displayText : displayText;
+          } else {
+            out += term.sign < 0 ? " - " + displayText : " + " + displayText;
+          }
+        }
+        return out;
+      }
+
+      function formatNode(node) {
+        if (node.type === "const") return node.value;
+        if (node.type === "sym") return node.name;
+        if (node.type === "neg") return "-" + maybeWrap(node.value, 4);
+        if (node.type === "func") return `${node.fn}(${formatNode(node.arg)})`;
+        if (node.type === "log") return `log_(${formatNode(node.base)})(${formatNode(node.arg)})`;
+        if (node.type === "pow") return `${maybeWrap(node.left, 3)} ^ ${maybeWrap(node.right, 4)}`;
+        if (node.type === "div") return `(${formatNode(node.left)} / (${formatNode(node.right)}))`;
+        if (node.type === "mul") return formatMulNode(node);
+        if (node.type === "add" || node.type === "sub") return formatAddNode(node);
+        return "";
+      }
+
+      function prettyDisplayExpression(expr) {
+        const cleaned = cleanExpression(expr);
+        try {
+          const ast = makeParser(cleaned);
+          let out = formatNode(ast);
+          out = normalizeSigns(out);
+          out = collapseRedundantParentheses(out);
+          out = out
+            .replace(/(^|[ (+\-*/])1 \* /g, "$1")
+            .replace(/- 1 \* /g, "- ")
+            .replace(/\+ 1 \* /g, "+ ")
+            .replace(/\/ \((x|pi|e|-?\d+(?:\/\d+)?)\)/g, "/ $1")
+            .replace(/\s{2,}/g, " ")
+            .trim();
+          return out;
+        } catch (_err) {
+          return cleaned;
+        }
+      }
+
+      function displayExpression(expr) {
+        if (state.displayMode === "clean") return prettyDisplayExpression(expr);
+        return expr;
+      }
+
+      function readBalanced(s, start) {
+        if (s[start] !== "(") return null;
+        let depth = 0;
+        for (let i = start; i < s.length; i += 1) {
+          if (s[i] === "(") depth += 1;
+          if (s[i] === ")") depth -= 1;
+          if (depth === 0) return { text: s.slice(start + 1, i), end: i + 1 };
+        }
+        return null;
+      }
+
+      function convertLogNotation(s) {
+        let out = "";
+        let i = 0;
+        while (i < s.length) {
+          if (!s.startsWith("Log_", i)) {
+            out += s[i];
+            i += 1;
+            continue;
+          }
+          i += 4;
+          let base = "";
+          let arg = "";
+
+          if (s[i] === "(") {
+            const baseChunk = readBalanced(s, i);
+            if (!baseChunk) {
+              out += "log_";
+              continue;
+            }
+            base = baseChunk.text;
+            i = baseChunk.end;
+          } else {
+            const baseStart = i;
+            while (i < s.length && s[i] !== "(") i += 1;
+            base = s.slice(baseStart, i).trim();
+          }
+
+          if (s[i] === "(") {
+            const argChunk = readBalanced(s, i);
+            if (argChunk) {
+              arg = argChunk.text;
+              i = argChunk.end;
+            }
+          }
+
+          if (base && arg) {
+            out += `log_(${base})(${arg})`;
+          } else {
+            out += `log_(${base})`;
+          }
+        }
+        return out;
+      }
+
+      function toAsciiMath(expr) {
+        return convertLogNotation(expr)
+          .replaceAll("Sin(", "sin(")
+          .replaceAll("Cos(", "cos(")
+          .replaceAll("Ln(", "ln(")
+          .replaceAll(" * ", " cdot ");
+      }
+
+      function renderMath(targetId, expr) {
+        const el = document.getElementById(targetId);
+        const ascii = toAsciiMath(expr);
+        el.innerHTML = "`" + ascii + "`";
+      }
+
+      async function typesetVisibleMath() {
+        if (window.MathJax && MathJax.typesetPromise) {
+          await MathJax.typesetPromise([document.getElementById("derivativeMath"), document.getElementById("originalMath")]);
+        }
+      }
+
+      function renderTable() {
+        const body = document.getElementById("tableBody");
+        body.innerHTML = "";
+        state.rows.forEach((r, i) => {
+          const tr = document.createElement("tr");
+          tr.dataset.index = String(i);
+          if (i === state.selected) tr.classList.add("active");
+          tr.innerHTML =
+            `<td>${i + 1}</td>` +
+            `<td>${shortText(r[0])}</td>` +
+            `<td>${shortText(r[1])}</td>`;
+          tr.addEventListener("click", () => selectRow(i));
+          body.appendChild(tr);
+        });
+      }
+
+      async function selectRow(index) {
+        if (index < 0 || index >= state.rows.length) return;
+        state.selected = index;
+        renderTable();
+        const [derivative, original] = state.rows[index];
+        renderMath("derivativeMath", displayExpression(derivative));
+        renderMath("originalMath", displayExpression(original));
+        document.getElementById("derivativeRaw").textContent = derivative;
+        document.getElementById("originalRaw").textContent = original;
+        document.getElementById("status").textContent =
+          `${state.source} | row ${index + 1}/${state.rows.length} | mode=${state.displayMode}`;
+        await typesetVisibleMath();
+      }
+
+      async function loadRows(rows, sourceLabel) {
+        state.rows = rows;
+        state.source = sourceLabel;
+        state.selected = rows.length ? 0 : -1;
+        renderTable();
+        if (rows.length) {
+          await selectRow(0);
+        } else {
+          document.getElementById("status").textContent = "No valid rows in CSV.";
+        }
+      }
+
+      async function loadCsvFromText(text, sourceLabel) {
+        const rows = cleanRows(parseCsv(text));
+        await loadRows(rows, sourceLabel);
+      }
+
+      document.getElementById("csvFileInput").addEventListener("change", async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const txt = await file.text();
+        await loadCsvFromText(txt, file.name);
+      });
+
+      document.getElementById("prevBtn").addEventListener("click", () => selectRow(Math.max(0, state.selected - 1)));
+      document.getElementById("nextBtn").addEventListener("click", () => selectRow(Math.min(state.rows.length - 1, state.selected + 1)));
+      document.getElementById("randomBtn").addEventListener("click", () => {
+        if (!state.rows.length) return;
+        const idx = Math.floor(Math.random() * state.rows.length);
+        selectRow(idx);
+      });
+      document.getElementById("gotoBtn").addEventListener("click", () => {
+        if (!state.rows.length) return;
+        const n = Number(document.getElementById("gotoInput").value);
+        if (!Number.isInteger(n)) return;
+        const idx = n - 1;
+        if (idx >= 0 && idx < state.rows.length) selectRow(idx);
+      });
+
+      document.getElementById("displayMode").addEventListener("change", async (e) => {
+        state.displayMode = e.target.value;
+        if (state.selected >= 0) {
+          await selectRow(state.selected);
+        } else {
+          document.getElementById("status").textContent = `Load a CSV to start. | mode=${state.displayMode}`;
+        }
+      });
+
+    </script>
+  </body>
+</html>
