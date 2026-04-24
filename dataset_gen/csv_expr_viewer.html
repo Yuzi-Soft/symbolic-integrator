@@ -791,8 +791,15 @@
         return out;
       }
 
+      function wrapFractionalExponents(s) {
+        return s.replace(/\^\s*(-?\d+\s*\/\s*-?\d+)/g, (_m, exp) => {
+          const compact = exp.replace(/\s+/g, "");
+          return `^(${compact})`;
+        });
+      }
+
       function toAsciiMath(expr) {
-        return convertLogNotation(expr)
+        return wrapFractionalExponents(convertLogNotation(expr))
           .replaceAll("Sin(", "sin(")
           .replaceAll("Cos(", "cos(")
           .replaceAll("Ln(", "ln(")

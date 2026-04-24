@@ -15,8 +15,12 @@ function = {
 }
 
 leaf = {
-    "var": 0.45,
-    "const": 0.55,
+    "var": 0.35,
+    "scaled_var": 0.20,
+    "affine_var": 0.25,
+    "power_var": 0.10,
+    "affine_power": 0.08,
+    "reciprocal_var": 0.02,
 }
 
 operation_root = {
@@ -75,7 +79,7 @@ def select_operation(depth: int) -> str:
 
 def generate_expr(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> Expr:
     if cur_depth >= max_depth or nodes <= 1:
-        return generate_leaf(context)
+        return generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
 
     op = "leaf"
     for _ in range(8):
@@ -85,7 +89,7 @@ def generate_expr(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> 
             break
 
     if op == "leaf":
-        expr = generate_leaf(context)
+        expr = generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
     elif op == "add":
         expr = generate_add(max_depth, cur_depth, nodes, context)
     elif op == "sub":
@@ -98,7 +102,7 @@ def generate_expr(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> 
         expr = generate_cmp(max_depth, cur_depth, nodes, context)
 
     if expr.node_count() > nodes:
-        return generate_leaf(context)
+        return generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
     return expr
 
 
@@ -106,24 +110,59 @@ def generate(max_depth: int = 4, nodes: int = 9) -> Expr:
     return generate_expr(max_depth=max_depth, cur_depth=1, nodes=nodes, context=Var("x"))
 
 
-def generate_leaf(context: Expr) -> Expr:
-    choice = random_select(leaf)
-    if choice == "var":
-        return Var("x")
-    return random_const()
+def generate_leaf(context: Expr, max_depth: int | None = None, cur_depth: int | None = None, nodes: int = 1) -> Expr:
+    feasible = {
+        name: weight
+        for name, weight in leaf.items()
+        if _leaf_shape_is_feasible(name, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
+    }
+    choice = random_select(feasible)
+
+    if choice == "scaled_var":
+        return generate_scaled_var_leaf()
+    if choice == "affine_var":
+        return generate_affine_var_leaf()
+    if choice == "power_var":
+        return generate_power_var_leaf()
+    if choice == "affine_power":
+        return generate_affine_power_leaf()
+    if choice == "reciprocal_var":
+        return Div(Const(1), Var("x"))
+    return Var("x")
+
+
+def generate_scaled_var_leaf() -> Expr:
+    return Mul([random_rational_const(non_zero=True, non_one=True), Var("x")])
+
+
+def generate_affine_var_leaf() -> Expr:
+    return Add([generate_scaled_var_leaf(), random_rational_const(non_zero=True)])
+
+
+def generate_power_var_leaf() -> Expr:
+    return Pow(Var("x"), random_small_power())
+
+
+def generate_affine_power_leaf() -> Expr:
+    return Add(
+        [
+            Mul([random_rational_const(non_zero=True, non_one=True), generate_power_var_leaf()]),
+            random_rational_const(non_zero=True),
+        ]
+    )
 
 
 def generate_add(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> Expr:
     terms = _generate_nary_children(max_depth, cur_depth, nodes, context)
     if len(terms) < 2:
-        return generate_leaf(context)
+        return generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
     return Add(terms)
 
 
 def generate_mul(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> Expr:
     factors = _generate_nary_children(max_depth, cur_depth, nodes, context)
     if len(factors) < 2:
-        return generate_leaf(context)
+        return generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
     return Mul(factors)
 
 
@@ -139,7 +178,7 @@ def generate_sub(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> E
 
 def generate_div(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> Expr:
     if nodes < 3:
-        return generate_leaf(context)
+        return generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth, nodes=nodes)
 
     numerator_nodes, denominator_nodes = number_split(nodes - 1, 2)
     numerator = generate_expr(max_depth, cur_depth + 1, numerator_nodes, context)
@@ -220,6 +259,26 @@ def random_const(positive: bool = False, non_zero: bool = False, non_one: bool =
         return candidate
 
 
+def random_rational_const(positive: bool = False, non_zero: bool = False, non_one: bool = False) -> Const:
+    while True:
+        numerator = random.randint(1, 9) if positive else random.randint(-9, 9)
+        denominator = random.randint(1, 5)
+        candidate = Const(Fraction(numerator, denominator))
+
+        if positive and candidate.value <= 0:
+            continue
+        if non_zero and candidate.value == 0:
+            continue
+        if non_one and candidate.value == 1:
+            continue
+
+        return candidate
+
+
+def random_small_power() -> Const:
+    return Const(random.choice([2, 3, 4]))
+
+
 def avoid_zero_const(expr: Expr) -> Expr:
     if isinstance(expr, Const) and isinstance(expr.value, Fraction) and expr.value == 0:
         return Const(1)
@@ -234,11 +293,11 @@ def force_positive_const(expr: Expr) -> Expr:
 
 def _generate_nary_children(max_depth: int, cur_depth: int, nodes: int, context: Expr) -> list[Expr]:
     if nodes < 3:
-        return [generate_leaf(context)]
+        return [generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth + 1, nodes=nodes)]
 
     max_arity = min(4, nodes - 1)
     if max_arity < 2:
-        return [generate_leaf(context)]
+        return [generate_leaf(context, max_depth=max_depth, cur_depth=cur_depth + 1, nodes=nodes)]
 
     arity = random.randint(2, max_arity)
     node_split = number_split(nodes - 1, arity)
@@ -257,3 +316,28 @@ def _op_is_feasible(op_name: str, max_depth: int, cur_depth: int, nodes: int) ->
     if op_name == "sub":
         return nodes >= 5 and cur_depth + 2 <= max_depth
     return False
+
+
+def _remaining_depth(max_depth: int | None, cur_depth: int | None) -> int | None:
+    if max_depth is None or cur_depth is None:
+        return None
+    return max_depth - cur_depth + 1
+
+
+def _leaf_shape_is_feasible(
+    name: str,
+    max_depth: int | None,
+    cur_depth: int | None,
+    nodes: int,
+) -> bool:
+    remaining_depth = _remaining_depth(max_depth, cur_depth)
+    required = {
+        "var": (1, 1),
+        "scaled_var": (3, 2),
+        "affine_var": (5, 3),
+        "power_var": (3, 2),
+        "affine_power": (7, 4),
+        "reciprocal_var": (3, 2),
+    }[name]
+    required_nodes, required_depth = required
+    return nodes >= required_nodes and (remaining_depth is None or remaining_depth >= required_depth)

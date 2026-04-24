@@ -10,9 +10,9 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from AST_nodes import Var
+from AST_nodes import Const, Var
 from differentiator import differentiate
-from generator import generate, number_split, random_select, select_operation
+from generator import generate, generate_leaf, number_split, random_select, select_operation
 from simplify import simplify
 
 
@@ -83,6 +83,22 @@ def case_generate_expr_type() -> tuple[bool, str]:
     return ok, f"type={expr.type}, pretty={expr.pretty()}"
 
 
+def case_leaf_budget_falls_back_to_x() -> tuple[bool, str]:
+    random.seed(10)
+    expr = generate_leaf(Var("x"), max_depth=1, cur_depth=1, nodes=1)
+    ok = isinstance(expr, Var)
+    return ok, f"type={expr.type}, pretty={expr.pretty()}"
+
+
+def case_leaf_never_bare_const() -> tuple[bool, str]:
+    for seed in range(30):
+        random.seed(seed + 200)
+        expr = generate_leaf(Var("x"), max_depth=5, cur_depth=1, nodes=5)
+        if isinstance(expr, Const):
+            return False, f"seed={seed}, expr={expr.pretty()}"
+    return True, "30 terminal leaves checked"
+
+
 def build_cases() -> list[Case]:
     return [
         Case(name="number_split_basic", runner=case_number_split_basic),
@@ -93,6 +109,8 @@ def build_cases() -> list[Case]:
         Case(name="generate_bounds_many", runner=case_generate_bounds_many),
         Case(name="generate_diff_simplify_pipeline", runner=case_generate_diff_simplify_pipeline),
         Case(name="generate_expr_type", runner=case_generate_expr_type),
+        Case(name="leaf_budget_falls_back_to_x", runner=case_leaf_budget_falls_back_to_x),
+        Case(name="leaf_never_bare_const", runner=case_leaf_never_bare_const),
     ]
 
 

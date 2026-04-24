@@ -21,27 +21,36 @@ from simplify import simplify
 
 GROUPS = {
     "simple": {
-        "max_depth": 3,
-        "nodes_range": (6, 10),
+        "max_depth": 4,
+        "nodes_range": (6, 12),
         "count": 1000,
+        "pool_count": 1500,
+        "trim_head": 250,
+        "trim_tail": 250,
         "min_derivative_nodes": 3,
         "require_advanced_expr": False,
         "require_nonzero_second_derivative": False,
         "max_integrand_repeats": 2,
     },
     "medium": {
-        "max_depth": 4,
-        "nodes_range": (11, 17),
+        "max_depth": 5,
+        "nodes_range": (11, 19),
         "count": 1000,
+        "pool_count": 1500,
+        "trim_head": 250,
+        "trim_tail": 250,
         "min_derivative_nodes": 6,
         "require_advanced_expr": True,
         "require_nonzero_second_derivative": False,
         "max_integrand_repeats": 3,
     },
     "hard": {
-        "max_depth": 5,
-        "nodes_range": (18, 26),
+        "max_depth": 6,
+        "nodes_range": (18, 28),
         "count": 1000,
+        "pool_count": 1500,
+        "trim_head": 500,
+        "trim_tail": 0,
         "min_derivative_nodes": 10,
         "require_advanced_expr": True,
         "require_nonzero_second_derivative": True,
@@ -68,6 +77,85 @@ def normalize_constants(s: str) -> str:
     normalized = re.sub(r"-?\d+(?:/\d+)?", "CONST", s)
     normalized = normalized.replace("pi", "CONST_PI").replace("e", "CONST_E")
     return normalized
+
+
+def difficulty_score(expr_text: str) -> float:
+    op_count = sum(expr_text.count(token) for token in ("+", "*", "/", "^", "Sin", "Cos", "Ln", "Log_"))
+    max_depth = max_parenthesis_depth(expr_text)
+    pow_count = expr_text.count("^")
+    div_count = expr_text.count("/")
+    trig_count = expr_text.count("Sin(") + expr_text.count("Cos(")
+    log_count = expr_text.count("Ln(") + expr_text.count("Log_")
+    add_terms = top_level_add_terms(expr_text)
+    return op_count + 0.5 * max_depth + pow_count + 0.8 * div_count + trig_count + 1.2 * log_count + 0.5 * add_terms
+
+
+def max_parenthesis_depth(expr_text: str) -> int:
+    depth = 0
+    max_depth = 0
+    for ch in expr_text:
+        if ch == "(":
+            depth += 1
+            max_depth = max(max_depth, depth)
+        elif ch == ")":
+            depth -= 1
+    return max_depth
+
+
+def top_level_add_terms(expr_text: str) -> int:
+    text = strip_wrapping_parentheses(expr_text.strip())
+    depth = 0
+    plus_count = 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "+" and depth == 0:
+            plus_count += 1
+    if plus_count == 0:
+        return 1
+    return plus_count + 1
+
+
+def strip_wrapping_parentheses(expr_text: str) -> str:
+    text = expr_text
+    while is_fully_wrapped(text):
+        text = text[1:-1].strip()
+    return text
+
+
+def is_fully_wrapped(expr_text: str) -> bool:
+    if len(expr_text) < 2 or expr_text[0] != "(" or expr_text[-1] != ")":
+        return False
+    depth = 0
+    for index, ch in enumerate(expr_text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if depth == 0 and index < len(expr_text) - 1:
+            return False
+    return depth == 0
+
+
+def trim_by_difficulty(
+    rows: list[tuple[str, str]],
+    final_count: int,
+    trim_head: int,
+    trim_tail: int,
+) -> list[tuple[str, str]]:
+    if trim_head < 0 or trim_tail < 0:
+        raise ValueError("trim counts must be non-negative")
+    if len(rows) - trim_head - trim_tail != final_count:
+        raise ValueError(
+            f"trim plan must keep exactly {final_count} rows, got pool={len(rows)}, "
+            f"trim_head={trim_head}, trim_tail={trim_tail}"
+        )
+
+    ranked = sorted(enumerate(rows), key=lambda item: (difficulty_score(item[1][0]), item[0]))
+    kept = ranked[trim_head : len(ranked) - trim_tail if trim_tail else len(ranked)]
+    return [row for _, row in kept]
 
 
 def const_rational_value(expr: Expr) -> Fraction | None:
@@ -158,6 +246,9 @@ def build_group_csv(
     nodes_min: int,
     nodes_max: int,
     count: int,
+    pool_count: int,
+    trim_head: int,
+    trim_tail: int,
     min_derivative_nodes: int,
     require_advanced_expr: bool,
     require_nonzero_second_derivative: bool,
@@ -167,7 +258,7 @@ def build_group_csv(
     seen_signatures: set[tuple[str, str]] = set()
     seen_rows: set[tuple[str, str]] = set()
     integrand_counts: dict[str, int] = {}
-    node_plan = uniform_node_plan(nodes_min, nodes_max, count)
+    node_plan = uniform_node_plan(nodes_min, nodes_max, pool_count)
     rejected = 0
 
     for target_nodes in node_plan:
@@ -228,7 +319,7 @@ def build_group_csv(
             rows.append(pair)
             break
 
-    while len(rows) < count:
+    while len(rows) < pool_count:
         target_nodes = random.randint(nodes_min, nodes_max)
         tries = 0
         while True:
@@ -303,13 +394,16 @@ def build_group_csv(
             rows.append(pair)
             break
 
+    pool_size = len(rows)
+    rows = trim_by_difficulty(rows, count, trim_head, trim_tail)
+
     out_path = os.path.join(ROOT_DIR, "dataset_gen", f"{name}.csv")
     with open(out_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerows(rows)
     print(
-        f"{name}: generated={len(rows)}, rejected={rejected}, "
-        f"unique_signatures={len(seen_signatures)}"
+        f"{name}: pool={pool_size}, generated={len(rows)}, rejected={rejected}, "
+        f"unique_signatures={len(seen_signatures)}, trim_head={trim_head}, trim_tail={trim_tail}"
     )
     return out_path
 
@@ -324,6 +418,9 @@ def main() -> None:
             nodes_min=nodes_min,
             nodes_max=nodes_max,
             count=cfg["count"],
+            pool_count=cfg["pool_count"],
+            trim_head=cfg["trim_head"],
+            trim_tail=cfg["trim_tail"],
             min_derivative_nodes=cfg["min_derivative_nodes"],
             require_advanced_expr=cfg["require_advanced_expr"],
             require_nonzero_second_derivative=cfg["require_nonzero_second_derivative"],
